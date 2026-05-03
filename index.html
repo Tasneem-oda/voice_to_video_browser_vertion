@@ -576,7 +576,7 @@ submitBtn.addEventListener('click', async () => {
     args.push('-map', `${audioIndex}:a:0`); 
 
     // إعدادات الضغط والإخراج
-    args.push('-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26');
+    args.push('-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '24');
     args.push('-c:a', 'aac', '-b:a', '96k', '-shortest', 'output.mp4');
 
     // تشغيل المحرك
