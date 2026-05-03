@@ -556,7 +556,7 @@ submitBtn.addEventListener('click', async () => {
       args.push('-i', `vid_${originalVidIndex}.mp4`);
       
       // نقص الفيديو ونضبط أبعاده
-      filterComplex += `[${segIndex}:v]trim=start=0:end=${useTime},setpts=PTS-STARTPTS,scale=854:480:force_original_aspect_ratio=decrease,pad=854:480:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24[v${segIndex}]; `;
+      filterComplex += `[${segIndex}:v]trim=start=0:end=${useTime},setpts=PTS-STARTPTS,scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v${segIndex}]; `;
       concatStr += `[v${segIndex}]`;
       
       remaining -= useTime;
@@ -576,7 +576,7 @@ submitBtn.addEventListener('click', async () => {
     args.push('-map', `${audioIndex}:a:0`); 
 
     // إعدادات الضغط والإخراج
-    args.push('-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '32');
+    args.push('-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26');
     args.push('-c:a', 'aac', '-b:a', '96k', '-shortest', 'output.mp4');
 
     // تشغيل المحرك
