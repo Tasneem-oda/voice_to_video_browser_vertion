@@ -5,13 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>دمج الصوت مع الفيديو</title>
   
-  <!-- إجباري: هذا الملف يجب أن يكون موجوداً في نفس مسار هذا الـ HTML على سيرفر الاستضافة -->
+  <!-- إجباري: أداة العزل الأمني يجب أن تكون أول سطر -->
   <script src="coi-serviceworker.js"></script>
   
-  <!-- مكتبات FFmpeg.wasm -->
-  <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.7/dist/umd/ffmpeg.js"></script>
-  <script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
-  <script src="https://unpkg.com/@ffmpeg/core@0.12.4/dist/umd/ffmpeg-core.js"></script>
+  <!-- استدعاء محرك FFmpeg (الإصدار 0.11 المستقر) -->
+  <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
@@ -189,7 +187,7 @@
   <header class="header">
     <div id="welcome-banner" style="display:none;">مرحباً، <span id="client-name-display"></span> ✨</div>
     <h1>دمج الصوت<br>مع <em>الفيديو</em></h1>
-    <p>تتم المعالجة بالكامل داخل المتصفح لضمان أقصى سرعة وحماية للخصوصية</p>
+    <p>تتم المعالجة بالكامل داخل متصفحك لضمان أقصى سرعة وحماية للخصوصية</p>
   </header>
 
   <div class="card" id="upload-section">
@@ -267,10 +265,10 @@
 // CONFIG & INITIALIZATION
 // ══════════════════════════════════════════════════════
 const CONFIG = {
-  BASE_URL:          'https://tasneemahmed-n8n-test.hf.space/webhook',
+  BASE_URL:          'https://tasneemahmed-n8n.hf.space/webhook',
   LIST_VIDEOS_PATH:  'list-videos',
-  PROXY_PATH:        'get-video-proxy', // المسار الجديد الأول
-  UPLOAD_PATH:       'upload-final-video', // المسار الجديد الثاني
+  PROXY_PATH:        'get-video-proxy',
+  UPLOAD_PATH:       'upload-final-video',
   HISTORY_PATH:      'list-history'
 };
 
@@ -467,16 +465,15 @@ function clearFile() {
   submitBtn.disabled = true;
 }
 
-// ── CLIENT-SIDE FFMPEG PROCESSING ──────────────────────────
+// ── CLIENT-SIDE FFMPEG PROCESSING (v0.11) ──────────────────────────
 submitBtn.addEventListener('click', async () => {
   hideError();
   if (!navigator.onLine) return showFatalError('❌ لا يوجد اتصال بالإنترنت.');
   if (!CLIENT_ID || !USER_PIN) return showFatalError('❌ بيانات المصادقة غير صالحة.');
   if (!selectedFile) return showError('⚠️ اختر ملف صوت أولاً');
 
-  // التأكد من توفر SharedArrayBuffer (شرط أساسي لعمل WASM)
   if (typeof SharedArrayBuffer === 'undefined') {
-    return showFatalError('❌ المتصفح يمنع المعالجة محلياً لغياب إعدادات الأمان. هل نسيت وضع ملف coi-serviceworker.js؟');
+    return showFatalError('❌ المتصفح يمنع المعالجة محلياً لغياب إعدادات الأمان. تأكد من وجود ملف coi-serviceworker.js');
   }
 
   showSection('loading');
@@ -484,41 +481,35 @@ submitBtn.addEventListener('click', async () => {
   progressFill.style.width = '0%';
 
   try {
-    const { FFmpeg } = window.FFmpegWASM;
-    const { fetchFile, toBlobURL } = window.FFmpegUtil;
-    const ffmpeg = new FFmpeg();
+    // 1. تهيئة الإصدار 0.11
+    const { createFFmpeg, fetchFile } = FFmpeg;
+    const ffmpeg = createFFmpeg({ 
+      log: true,
+      corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js'
+    });
 
-    ffmpeg.on('progress', ({ progress }) => {
-      // شريط التقدم أثناء الدمج
-      if (progress >= 0 && progress <= 1) {
-        progressFill.style.width = `${Math.round(progress * 100)}%`;
+    ffmpeg.setProgress(({ ratio }) => {
+      if (ratio >= 0 && ratio <= 1) {
+        progressFill.style.width = `${Math.round(ratio * 100)}%`;
       }
     });
 
-   const coreURL = 'https://unpkg.com/@ffmpeg/core@0.12.4/dist/umd';
-    const ffmpegURL = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.7/dist/umd';
+    await ffmpeg.load();
 
-    await ffmpeg.load({
-      coreURL: await toBlobURL(`${coreURL}/ffmpeg-core.js`, 'text/javascript'),
-      wasmURL: await toBlobURL(`${coreURL}/ffmpeg-core.wasm`, 'application/wasm'),
-      workerURL: await toBlobURL(`${ffmpegURL}/814.ffmpeg.js`, 'text/javascript')
-    });
-
-    // اختيار الفيديوهات (يدوي أو عشوائي)
+    // اختيار الفيديوهات
     let vidsToProcess = selectedVideoIds.length > 0 ? selectedVideoIds : [];
     if (vidsToProcess.length === 0) {
       const validVids = availableVideos.filter(v => v.name.toLowerCase() !== 'output_videos');
       if (validVids.length === 0) throw new Error("لا توجد فيديوهات صالحة للاستخدام في المجلد");
       const shuffled = [...validVids].sort(() => 0.5 - Math.random());
-      const count = Math.min(Math.floor(Math.random() * 4) + 2, shuffled.length); // من 2 إلى 5 فيديوهات
+      const count = Math.min(Math.floor(Math.random() * 4) + 2, shuffled.length); // من 2 إلى 5
       vidsToProcess = shuffled.slice(0, count).map(v => v.id);
     }
 
     setStep(2);
-    // كتابة الصوت في الذاكرة
-    await ffmpeg.writeFile('audio_in.ext', await fetchFile(selectedFile));
+    // 2. قراءة الملفات إلى الذاكرة الوهمية
+    ffmpeg.FS('writeFile', 'audio_in.ext', await fetchFile(selectedFile));
 
-    // جلب الفيديوهات من Proxy
     const segments = [];
     for (let i = 0; i < vidsToProcess.length; i++) {
       const vidId = vidsToProcess[i];
@@ -529,30 +520,30 @@ submitBtn.addEventListener('click', async () => {
       const blob = await res.blob();
       
       const vidName = `vid_${i}.mp4`;
-      await ffmpeg.writeFile(vidName, await fetchFile(blob));
+      ffmpeg.FS('writeFile', vidName, await fetchFile(blob));
       segments.push(`file '${vidName}'`);
     }
 
-    await ffmpeg.writeFile('concat.txt', segments.join('\n'));
+    ffmpeg.FS('writeFile', 'concat.txt', segments.join('\n'));
 
     setStep(3);
-    // تنفيذ المعالجة بدقة 480p لضمان عدم انهيار متصفحات الهواتف
+    // 3. التنفيذ
     const scaleFilter = 'scale=854:480:force_original_aspect_ratio=decrease,pad=854:480:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24';
     
-    await ffmpeg.exec([
+    await ffmpeg.run(
       '-f', 'concat', '-safe', '0', 
       '-i', 'concat.txt', 
       '-i', 'audio_in.ext',
       '-vf', scaleFilter,
       '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '32',
       '-c:a', 'aac', '-b:a', '96k',
-      '-shortest', // القص حسب مدة الصوت
+      '-shortest',
       'output.mp4'
-    ]);
+    );
 
     setStep(4);
-    // قراءة الملف من الذاكرة وتجهيزه للرفع
-    const outputData = await ffmpeg.readFile('output.mp4');
+    // 4. استخراج ورفع الملف
+    const outputData = ffmpeg.FS('readFile', 'output.mp4');
     const finalBlob = new Blob([outputData.buffer], { type: 'video/mp4' });
     
     const formData = new FormData();
@@ -566,7 +557,6 @@ submitBtn.addEventListener('click', async () => {
     });
 
     if (!uploadRes.ok) throw new Error('فشل تخزين الملف النهائي في السحابة');
-    const responseData = await uploadRes.json();
 
     // الانتهاء
     const videoUrl = URL.createObjectURL(finalBlob);
