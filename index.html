@@ -6,7 +6,6 @@
   <title>دمج الصوت مع الفيديو</title>
   
   <script src="coi-serviceworker.js"></script>
-  
   <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -260,7 +259,7 @@
 
 <script>
 const CONFIG = {
-  BASE_URL:          'https://tasneemahmed-n8n-test.hf.space/webhook',
+  BASE_URL:          'https://tasneemahmed-n8n.hf.space/webhook',
   LIST_VIDEOS_PATH:  'list-videos',
   PROXY_PATH:        'get-video-proxy',
   UPLOAD_PATH:       'upload-final-video',
@@ -459,6 +458,23 @@ function clearFile() {
   submitBtn.disabled = true;
 }
 
+// دالة ذكية لحساب مدة الملفات باستخدام المتصفح (تعوض دور ffprobe)
+const getMediaDuration = async (fileOrBlob, isVideo = false) => {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(fileOrBlob);
+    const el = document.createElement(isVideo ? 'video' : 'audio');
+    el.src = url;
+    el.onloadedmetadata = () => {
+      resolve(el.duration);
+      URL.revokeObjectURL(url);
+    };
+    el.onerror = () => {
+      resolve(5); // في حال فشل القراءة، نعطي قيمة افتراضية 5 ثواني
+      URL.revokeObjectURL(url);
+    };
+  });
+};
+
 submitBtn.addEventListener('click', async () => {
   hideError();
   if (!navigator.onLine) return showFatalError('❌ لا يوجد اتصال بالإنترنت.');
@@ -499,10 +515,14 @@ submitBtn.addEventListener('click', async () => {
 
     setStep(2);
     
+    // جلب وحساب مدة الصوت
     const audioExt = selectedFile.name.split('.').pop() || 'mp3';
     const audioName = `audio_in.${audioExt}`;
     ffmpeg.FS('writeFile', audioName, await fetchFile(selectedFile));
+    const audioDur = await getMediaDuration(selectedFile, false);
 
+    // جلب الفيديوهات وحساب مدتها
+    const vidDurations = [];
     for (let i = 0; i < vidsToProcess.length; i++) {
       const vidId = vidsToProcess[i];
       const proxyUrl = `${CONFIG.BASE_URL}/${CONFIG.PROXY_PATH}?video_id=${vidId}&client_id=${CLIENT_ID}&pin=${USER_PIN}`;
@@ -513,46 +533,63 @@ submitBtn.addEventListener('click', async () => {
       
       const vidName = `vid_${i}.mp4`;
       ffmpeg.FS('writeFile', vidName, await fetchFile(blob));
+      
+      const dur = await getMediaDuration(blob, true);
+      vidDurations.push(dur > 0 ? dur : 5);
     }
 
     setStep(3);
     
     const args = [];
-    
-    for (let i = 0; i < vidsToProcess.length; i++) {
-      args.push('-i', `vid_${i}.mp4`);
-    }
-    
-    args.push('-i', audioName);
-    const audioIndex = vidsToProcess.length;
-
     let filterComplex = '';
     let concatStr = '';
-    const scaleFilter = 'scale=854:480:force_original_aspect_ratio=decrease,pad=854:480:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24';
+    let remaining = audioDur;
+    let vidPointer = 0;
+    let segIndex = 0;
 
-    for (let i = 0; i < vidsToProcess.length; i++) {
-      filterComplex += `[${i}:v]${scaleFilter}[v${i}]; `;
-      concatStr += `[v${i}]`;
+    // الخوارزمية الديناميكية: بناء التسلسل الزمني للفيديو بناءً على مدة الصوت
+    while (remaining > 0.1 && segIndex < 150) { 
+      const originalVidIndex = vidPointer % vidsToProcess.length;
+      const useTime = Math.min(vidDurations[originalVidIndex], remaining);
+      
+      // نضيف الملف كمصدر إدخال جديد لتجنب تعارض الـ Stream
+      args.push('-i', `vid_${originalVidIndex}.mp4`);
+      
+      // نقص الفيديو ونضبط أبعاده
+      filterComplex += `[${segIndex}:v]trim=start=0:end=${useTime},setpts=PTS-STARTPTS,scale=854:480:force_original_aspect_ratio=decrease,pad=854:480:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24[v${segIndex}]; `;
+      concatStr += `[v${segIndex}]`;
+      
+      remaining -= useTime;
+      segIndex++;
+      vidPointer++;
     }
-    
-    filterComplex += `${concatStr}concat=n=${vidsToProcess.length}:v=1:a=0[outv]`;
+
+    // إضافة ملف الصوت كمدخل أخير
+    args.push('-i', audioName);
+    const audioIndex = segIndex; 
+
+    // أمر التجميع النهائي
+    filterComplex += `${concatStr}concat=n=${segIndex}:v=1:a=0[outv]`;
 
     args.push('-filter_complex', filterComplex);
     args.push('-map', '[outv]'); 
     args.push('-map', `${audioIndex}:a:0`); 
 
+    // إعدادات الضغط والإخراج
     args.push('-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '32');
     args.push('-c:a', 'aac', '-b:a', '96k', '-shortest', 'output.mp4');
 
+    // تشغيل المحرك
     await ffmpeg.run(...args);
 
     const filesInMemory = ffmpeg.FS('readdir', '/');
     if (!filesInMemory.includes('output.mp4')) {
-        throw new Error("فشلت عملية دمج الفيديوهات. يرجى فتح أدوات المطور (F12) ومراجعة الكونسول لمعرفة السبب.");
+        throw new Error("فشلت عملية دمج الفيديوهات. يرجى مراجعة الكونسول (F12) لمزيد من التفاصيل.");
     }
 
     setStep(4);
     
+    // استخراج الملف ورفعه
     const outputData = ffmpeg.FS('readFile', 'output.mp4');
     const finalBlob = new Blob([outputData.buffer], { type: 'video/mp4' });
     
@@ -574,6 +611,7 @@ submitBtn.addEventListener('click', async () => {
     showSection('result');
     
   } catch(err) {
+    console.error(err);
     showFatalError(err.message || 'خطأ أثناء المعالجة المحلية');
     showSection('upload');
   }
