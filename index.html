@@ -484,7 +484,7 @@ submitBtn.addEventListener('click', async () => {
   progressFill.style.width = '0%';
 
   try {
-    const { FFmpeg } = window.FFmpeg;
+    const { FFmpeg } = window.FFmpegWASM;
     const { fetchFile } = window.FFmpegUtil;
     const ffmpeg = new FFmpeg();
 
